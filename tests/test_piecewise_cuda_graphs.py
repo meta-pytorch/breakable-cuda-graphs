@@ -14,6 +14,7 @@ import weakref
 from unittest.mock import patch
 
 import piecewise_cuda_graphs as pcg
+import pytest
 import torch
 from absl.testing import parameterized
 from piecewise_cuda_graphs import (
@@ -49,6 +50,7 @@ class ForceCUDAGraphGC:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestBasicCapture(unittest.TestCase):
     def test_basic_capture_and_replay(self):
@@ -78,6 +80,7 @@ class TestBasicCapture(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestNoGraphPlacement(parameterized.TestCase):
     def test_no_graph_sandwich(self):
@@ -388,6 +391,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestMixedOps(ForceCUDAGraphGC, unittest.TestCase):
     def test_mixed_ops_multiple_no_graph(self):
@@ -501,6 +505,7 @@ class TestMixedOps(ForceCUDAGraphGC, unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestReturnValues(parameterized.TestCase):
     def test_no_graph_returns_tensor_raises(self):
@@ -619,6 +624,7 @@ class TestReturnValues(parameterized.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestEdgeCases(unittest.TestCase):
     def test_no_graph_outside_capture(self):
@@ -980,6 +986,7 @@ class TestEdgeCases(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestIsInPiecewiseGraph(unittest.TestCase):
     def test_is_in_piecewise_graph(self):
@@ -1033,6 +1040,7 @@ class TestIsInPiecewiseGraph(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestMemoryPools(unittest.TestCase):
     def test_fresh_sequence_lazy_pool(self):
@@ -1190,6 +1198,7 @@ class TestMemoryPools(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestDropInReplacement(unittest.TestCase):
     def test_whole_network_capture_drop_in(self):
@@ -1497,6 +1506,7 @@ class TestDropInReplacement(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestDebugForkTracking(ForceCUDAGraphGC, unittest.TestCase):
     def test_partial_join_reports_only_unjoined_stream(self):
@@ -1596,6 +1606,7 @@ class TestDebugForkTracking(ForceCUDAGraphGC, unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestForkJoin(ForceCUDAGraphGC, parameterized.TestCase):
     @parameterized.named_parameters(
@@ -1670,6 +1681,7 @@ class TestForkJoin(ForceCUDAGraphGC, parameterized.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestUnjoinedStreamErrors(ForceCUDAGraphGC, parameterized.TestCase):
     @parameterized.named_parameters(
@@ -1757,6 +1769,7 @@ class TestUnjoinedStreamErrors(ForceCUDAGraphGC, parameterized.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestConcurrentCaptures(unittest.TestCase):
     def test_concurrent_captures_with_no_graphs(self):
@@ -1824,6 +1837,7 @@ class TestConcurrentCaptures(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestEagerSegmentRetention(ForceCUDAGraphGC, unittest.TestCase):
     def test_eager_segment_does_not_retain_input_tensors(self):
