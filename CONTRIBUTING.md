@@ -27,5 +27,5 @@ Complete your CLA here: <https://code.facebook.com/cla>
 
 ## License
 
-By contributing to `piecewise_cuda_graphs`, you agree that your contributions will be licensed
+By contributing to `breakable_cuda_graphs`, you agree that your contributions will be licensed
 under the LICENSE file in the root directory of this source tree.

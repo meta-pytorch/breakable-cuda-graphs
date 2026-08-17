@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "piecewise_cuda_graphs"
+name = "breakable_cuda_graphs"
 version = "0.1.0"
-description = "Piecewise CUDA graphs for PyTorch"
+description = "Breakable CUDA graphs for PyTorch"
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.10"
@@ -33,12 +33,12 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/meta-pytorch/piecewise_cuda_graphs"
-Repository = "https://github.com/meta-pytorch/piecewise_cuda_graphs"
-Issues = "https://github.com/meta-pytorch/piecewise_cuda_graphs/issues"
+Homepage = "https://github.com/meta-pytorch/breakable-cuda-graphs"
+Repository = "https://github.com/meta-pytorch/breakable-cuda-graphs"
+Issues = "https://github.com/meta-pytorch/breakable-cuda-graphs/issues"
 
 [tool.setuptools]
-py-modules = ["piecewise_cuda_graphs"]
+py-modules = ["breakable_cuda_graphs"]
 packages = []
 
 [tool.ruff]

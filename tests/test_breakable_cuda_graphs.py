@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Tests for piecewise_cuda_graphs."""
+"""Tests for breakable_cuda_graphs."""
 
 import copy
 import gc
@@ -13,16 +13,16 @@ import unittest
 import weakref
 from unittest.mock import patch
 
-import piecewise_cuda_graphs as pcg
+import breakable_cuda_graphs as bcg
 import pytest
 import torch
 from absl.testing import parameterized
-from piecewise_cuda_graphs import (
+from breakable_cuda_graphs import (
     CUDAGraphSequence,
+    breakable_graph,
     force_no_graph,
-    is_in_piecewise_graph,
+    is_in_breakable_graph,
     no_graph,
-    piecewise_graph,
 )
 
 
@@ -64,7 +64,7 @@ class TestBasicCapture(unittest.TestCase):
                 static_output = static_input * 2
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             static_output = static_input * 2
 
         for val in [3.0, 5.0]:
@@ -112,12 +112,12 @@ class TestNoGraphPlacement(parameterized.TestCase):
                 all_steps(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             all_steps(buf, static_input)
 
         self.assertEqual(len(seq._segments), 3)
         self.assertIsInstance(seq._segments[0], torch.cuda.CUDAGraph)
-        self.assertIsInstance(seq._segments[1], pcg._EagerSegment)
+        self.assertIsInstance(seq._segments[1], bcg._EagerSegment)
         self.assertIsInstance(seq._segments[2], torch.cuda.CUDAGraph)
 
         for val in [2.0, 4.0]:
@@ -152,12 +152,12 @@ class TestNoGraphPlacement(parameterized.TestCase):
                 all_steps(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             all_steps(buf, static_input)
 
         self.assertEqual(len(seq._segments), 3)
         self.assertIsInstance(seq._segments[0], torch.cuda.CUDAGraph)
-        self.assertIsInstance(seq._segments[1], pcg._EagerSegment)
+        self.assertIsInstance(seq._segments[1], bcg._EagerSegment)
         self.assertIsInstance(seq._segments[2], torch.cuda.CUDAGraph)
 
         for val in [2.0, 5.0]:
@@ -193,12 +193,12 @@ class TestNoGraphPlacement(parameterized.TestCase):
                 all_steps(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             all_steps(buf, static_input)
 
         self.assertEqual(len(seq._segments), 3)
         self.assertIsInstance(seq._segments[0], torch.cuda.CUDAGraph)
-        self.assertIsInstance(seq._segments[1], pcg._EagerSegment)
+        self.assertIsInstance(seq._segments[1], bcg._EagerSegment)
         self.assertIsInstance(seq._segments[2], torch.cuda.CUDAGraph)
 
         for val in [2.0, 5.0]:
@@ -243,7 +243,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
                 all_steps(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             all_steps(buf, static_input)
 
         # 6 force_no_graph + 1 @no_graph = 7 no-graph regions
@@ -285,14 +285,14 @@ class TestNoGraphPlacement(parameterized.TestCase):
                         all_steps(buf)
                 torch.cuda.current_stream().wait_stream(s)
 
-                with piecewise_graph(seq):
+                with breakable_graph(seq):
                     all_steps(buf)
 
                 self.assertEqual(len(seq._segments), 5)
                 self.assertIsInstance(seq._segments[0], torch.cuda.CUDAGraph)
-                self.assertIsInstance(seq._segments[1], pcg._EagerSegment)
+                self.assertIsInstance(seq._segments[1], bcg._EagerSegment)
                 self.assertIsInstance(seq._segments[2], torch.cuda.CUDAGraph)
-                self.assertIsInstance(seq._segments[3], pcg._EagerSegment)
+                self.assertIsInstance(seq._segments[3], bcg._EagerSegment)
                 self.assertIsInstance(seq._segments[4], torch.cuda.CUDAGraph)
 
                 seq.replay()
@@ -331,7 +331,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
                 all_steps(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             all_steps(buf, static_input)
 
         self.assertEqual(len(seq._segments), expected_segments)
@@ -375,7 +375,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
                 workload(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             workload(buf, static_input)
 
         for val in [2.0, 5.0]:
@@ -436,15 +436,15 @@ class TestMixedOps(ForceCUDAGraphGC, unittest.TestCase):
                 all_steps()
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             all_steps()
 
         # gemm | scale | bias + reduce | postprocess
         self.assertEqual(len(seq._segments), 5)
         self.assertIsInstance(seq._segments[0], torch.cuda.CUDAGraph)
-        self.assertIsInstance(seq._segments[1], pcg._EagerSegment)
+        self.assertIsInstance(seq._segments[1], bcg._EagerSegment)
         self.assertIsInstance(seq._segments[2], torch.cuda.CUDAGraph)
-        self.assertIsInstance(seq._segments[3], pcg._EagerSegment)
+        self.assertIsInstance(seq._segments[3], bcg._EagerSegment)
         self.assertIsInstance(seq._segments[4], torch.cuda.CUDAGraph)
 
         for a_val, b_val in [(0.1, 0.2), (0.5, 0.3)]:
@@ -487,7 +487,7 @@ class TestMixedOps(ForceCUDAGraphGC, unittest.TestCase):
                 buf.add_(10.0)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             buf.fill_(1.0)
             side.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(side):
@@ -519,7 +519,7 @@ class TestReturnValues(parameterized.TestCase):
         static_input.fill_(2.0)
 
         with self.assertRaisesRegex(RuntimeError, "returns one or more CUDA tensors"):
-            with piecewise_graph(seq):
+            with breakable_graph(seq):
                 compute(static_input)
 
     @parameterized.named_parameters(
@@ -539,7 +539,7 @@ class TestReturnValues(parameterized.TestCase):
         static_input.fill_(2.0)
 
         with self.assertRaisesRegex(RuntimeError, "returns one or more CUDA tensors"):
-            with piecewise_graph(seq):
+            with breakable_graph(seq):
                 compute(static_input)
 
     def test_no_graph_returns_non_tensor_allowed(self):
@@ -553,7 +553,7 @@ class TestReturnValues(parameterized.TestCase):
         seq = CUDAGraphSequence()
         static_input.fill_(2.0)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             result = compute(static_input)
 
         self.assertEqual(result, 1.0)
@@ -569,7 +569,7 @@ class TestReturnValues(parameterized.TestCase):
         seq = CUDAGraphSequence()
         static_input.fill_(2.0)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             result = compute(static_input)
 
         self.assertFalse(result.is_cuda)
@@ -603,7 +603,7 @@ class TestReturnValues(parameterized.TestCase):
                 all_steps(0.5, 0.1)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             extra = all_steps(0.5, 0.1)
 
         self.assertEqual(extra, 0.1 * 2.0 * 3)
@@ -672,7 +672,7 @@ class TestEdgeCases(unittest.TestCase):
                 workload_a(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             workload_a(buf, static_input)
 
         static_input.fill_(2.0)
@@ -692,7 +692,7 @@ class TestEdgeCases(unittest.TestCase):
                 workload_b(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             workload_b(buf, static_input)
 
         static_input.fill_(2.0)
@@ -730,7 +730,7 @@ class TestEdgeCases(unittest.TestCase):
                 outer(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             outer(buf, static_input)
 
         for val in [2.0, 5.0]:
@@ -764,10 +764,10 @@ class TestEdgeCases(unittest.TestCase):
         torch.cuda.current_stream().wait_stream(s)
 
         with self.assertRaisesRegex(RuntimeError, "intentional failure"):
-            with piecewise_graph(seq):
+            with breakable_graph(seq):
                 all_steps(buf)
 
-        self.assertIsNone(pcg._current_piecewise_graph_ctx.get())
+        self.assertIsNone(bcg._current_breakable_graph_ctx.get())
 
     def test_exception_during_open_segment(self):
         buf = torch.empty(5, device="cuda")
@@ -784,11 +784,11 @@ class TestEdgeCases(unittest.TestCase):
         # break yet). __exit__ must let the original error propagate (not mask
         # it with a cleanup error) and still reset the context var.
         with self.assertRaisesRegex(RuntimeError, "boom"):
-            with piecewise_graph(seq):
+            with breakable_graph(seq):
                 buf.fill_(2.0)
                 raise RuntimeError("boom")
 
-        self.assertIsNone(pcg._current_piecewise_graph_ctx.get())
+        self.assertIsNone(bcg._current_breakable_graph_ctx.get())
 
     def test_no_graph_with_cpu_tensor_arg(self):
         static_input = torch.empty(5, device="cuda")
@@ -811,7 +811,7 @@ class TestEdgeCases(unittest.TestCase):
                 scale_by(buf, cpu_factor)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             buf.copy_(static_input)
             scale_by(buf, cpu_factor)
 
@@ -855,7 +855,7 @@ class TestEdgeCases(unittest.TestCase):
                 combine(dst, [a, b], cfg={"weight": weight, "cpu_bias": cpu_bias})
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             combine(dst, [a, b], cfg={"weight": weight, "cpu_bias": cpu_bias})
 
         for a_val, b_val, w_val in [(1.0, 2.0, 3.0), (2.0, 5.0, 4.0)]:
@@ -889,7 +889,7 @@ class TestEdgeCases(unittest.TestCase):
         torch.cuda.current_stream().wait_stream(s)
 
         with self.assertRaisesRegex(RuntimeError, "intentional failure"):
-            with piecewise_graph(seq):
+            with breakable_graph(seq):
                 buf.copy_(static_input)
                 failing_step(buf)
 
@@ -904,7 +904,7 @@ class TestEdgeCases(unittest.TestCase):
                 eager_step(buf)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             buf.copy_(static_input)
             eager_step(buf)
 
@@ -915,7 +915,7 @@ class TestEdgeCases(unittest.TestCase):
                 torch.equal(buf, torch.full((5,), val * 3.0, device="cuda"))
             )
 
-    def test_nested_piecewise_graph_raises(self):
+    def test_nested_breakable_graph_raises(self):
         buf = torch.empty(5, device="cuda")
         seq1 = CUDAGraphSequence()
         seq2 = CUDAGraphSequence()
@@ -929,11 +929,11 @@ class TestEdgeCases(unittest.TestCase):
 
         with self.assertRaisesRegex(
             RuntimeError,
-            "nested piecewise_graph captures are not supported",
+            "nested breakable_graph captures are not supported",
         ):
-            with piecewise_graph(seq1):
+            with breakable_graph(seq1):
                 buf.fill_(2.0)
-                with piecewise_graph(seq2):
+                with breakable_graph(seq2):
                     buf.mul_(3.0)
 
     def test_exception_during_begin_segment(self):
@@ -960,7 +960,7 @@ class TestEdgeCases(unittest.TestCase):
         # Let the first segment (entered in __enter__) succeed, then fail when a
         # no-graph region tries to begin the next segment -- so __exit__ runs
         # with _graph_ctx already None.
-        original_begin = pcg.piecewise_graph._begin_segment
+        original_begin = bcg.breakable_graph._begin_segment
         begin_calls = 0
 
         def failing_begin(self):
@@ -970,26 +970,26 @@ class TestEdgeCases(unittest.TestCase):
                 return original_begin(self)
             raise RuntimeError("simulated _begin_segment failure")
 
-        with patch.object(pcg.piecewise_graph, "_begin_segment", failing_begin):
+        with patch.object(bcg.breakable_graph, "_begin_segment", failing_begin):
             with self.assertRaisesRegex(
                 RuntimeError, "simulated _begin_segment failure"
             ):
-                with piecewise_graph(seq):
+                with breakable_graph(seq):
                     buf.fill_(1.0)
                     eager_step(buf)
 
-        self.assertIsNone(pcg._current_piecewise_graph_ctx.get())
+        self.assertIsNone(bcg._current_breakable_graph_ctx.get())
 
 
 # ---------------------------------------------------------------------------
-# is_in_piecewise_graph -- query whether a capture is currently active.
+# is_in_breakable_graph -- query whether a capture is currently active.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
-class TestIsInPiecewiseGraph(unittest.TestCase):
-    def test_is_in_piecewise_graph(self):
+class TestIsInBreakableGraph(unittest.TestCase):
+    def test_is_in_breakable_graph(self):
         buf = torch.empty(5, device="cuda")
         observed = {}
 
@@ -998,13 +998,13 @@ class TestIsInPiecewiseGraph(unittest.TestCase):
             # Runs in the eager window between two graph segments -- the capture
             # is still active, so this must report True during capture (and
             # False when this same body re-runs during replay).
-            observed["eager_segment"] = is_in_piecewise_graph()
+            observed["eager_segment"] = is_in_breakable_graph()
             x.mul_(2.0)
 
         def all_steps(buf: torch.Tensor):
             buf.fill_(1.0)
             # Inside a captured graph segment.
-            observed["graph_segment"] = is_in_piecewise_graph()
+            observed["graph_segment"] = is_in_breakable_graph()
             eager_step(buf)
             buf.add_(1.0)
 
@@ -1018,18 +1018,18 @@ class TestIsInPiecewiseGraph(unittest.TestCase):
         torch.cuda.current_stream().wait_stream(s)
 
         # Outside any capture.
-        self.assertFalse(is_in_piecewise_graph())
+        self.assertFalse(is_in_breakable_graph())
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             all_steps(buf)
 
         # Back outside the capture.
-        self.assertFalse(is_in_piecewise_graph())
+        self.assertFalse(is_in_breakable_graph())
         # True while capturing both a graph segment and an eager segment.
         self.assertTrue(observed["graph_segment"])
         self.assertTrue(observed["eager_segment"])
 
-        # Replay does not enter piecewise_graph, so it must report False.
+        # Replay does not enter breakable_graph, so it must report False.
         observed.clear()
         seq.replay()
         self.assertFalse(observed["eager_segment"])
@@ -1083,10 +1083,10 @@ class TestMemoryPools(unittest.TestCase):
                 workload_2(buf_2, static_in_2)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq1):
+        with breakable_graph(seq1):
             workload_1(buf_1, static_in_1)
 
-        with piecewise_graph(seq2):
+        with breakable_graph(seq2):
             workload_2(buf_2, static_in_2)
 
         self.assertEqual(seq1.pool(), seq2.pool())
@@ -1134,7 +1134,7 @@ class TestMemoryPools(unittest.TestCase):
                 all_steps(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             all_steps(buf, static_input)
 
         graphs = [s for s in seq._segments if isinstance(s, torch.cuda.CUDAGraph)]
@@ -1165,7 +1165,7 @@ class TestMemoryPools(unittest.TestCase):
                 workload(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             workload(buf, static_input)
 
         pool_before = seq.pool()
@@ -1181,7 +1181,7 @@ class TestMemoryPools(unittest.TestCase):
                 workload(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             workload(buf, static_input)
 
         self.assertEqual(seq.pool(), pool_before)
@@ -1194,7 +1194,7 @@ class TestMemoryPools(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Drop-in replacement -- piecewise_graph used in place of torch.cuda.graph.
+# Drop-in replacement -- breakable_graph used in place of torch.cuda.graph.
 # ---------------------------------------------------------------------------
 
 
@@ -1228,7 +1228,7 @@ class TestDropInReplacement(unittest.TestCase):
 
         seq = CUDAGraphSequence()
         optimizer.zero_grad(set_to_none=True)
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             static_y_pred = model(static_input)
             static_loss = loss_fn(static_y_pred, static_target)
             static_loss.backward()
@@ -1275,7 +1275,7 @@ class TestDropInReplacement(unittest.TestCase):
 
         seq = CUDAGraphSequence()
         optimizer.zero_grad(set_to_none=True)
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             with torch.amp.autocast("cuda"):
                 static_y_pred = model(static_input)
                 static_loss = loss_fn(static_y_pred, static_target)
@@ -1337,7 +1337,7 @@ class TestDropInReplacement(unittest.TestCase):
 
         seq = CUDAGraphSequence()
         model.zero_grad(set_to_none=True)
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             static_y = model(static_input)
             static_loss = loss_fn(static_y, static_target)
             log_loss(static_loss)  # eager break splits fwd graph from bwd graph
@@ -1346,7 +1346,7 @@ class TestDropInReplacement(unittest.TestCase):
         # forward graph -> eager break -> backward graph
         self.assertEqual(len(seq._segments), 3)
         self.assertIsInstance(seq._segments[0], torch.cuda.CUDAGraph)
-        self.assertIsInstance(seq._segments[1], pcg._EagerSegment)
+        self.assertIsInstance(seq._segments[1], bcg._EagerSegment)
         self.assertIsInstance(seq._segments[2], torch.cuda.CUDAGraph)
 
         loss_log.clear()
@@ -1378,7 +1378,7 @@ class TestDropInReplacement(unittest.TestCase):
         self.assertEqual(len(loss_log), 3)
 
     def test_whole_training_step_with_eager_layer_fwd_and_bwd(self):
-        """Showcase a full training step under piecewise_graph where one model
+        """Showcase a full training step under breakable_graph where one model
         layer runs eagerly in BOTH its forward and backward.
 
         The eager layer is a custom autograd Function whose forward and backward
@@ -1450,13 +1450,13 @@ class TestDropInReplacement(unittest.TestCase):
 
         # Capture the whole training step: forward + backward + optimizer step.
         # Backward must run single-threaded: the autograd engine otherwise
-        # dispatches backward nodes to a worker thread where the piecewise_graph
+        # dispatches backward nodes to a worker thread where the breakable_graph
         # context (a contextvar) is not visible, so the @no_graph break in the
         # custom backward would not fire. Running on the capturing thread keeps
         # both the context and the stream-capture state consistent.
         seq = CUDAGraphSequence()
         optimizer.zero_grad(set_to_none=True)
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             static_pred = model(static_input)
             static_loss = loss_fn(static_pred, static_target)
             with torch.autograd.set_multithreading_enabled(False):
@@ -1468,7 +1468,7 @@ class TestDropInReplacement(unittest.TestCase):
         eager_idxs = [
             i
             for i, seg in enumerate(seq._segments)
-            if isinstance(seg, pcg._EagerSegment)
+            if isinstance(seg, bcg._EagerSegment)
         ]
         self.assertEqual(len(eager_idxs), 2)
         self.assertGreater(eager_idxs[0], 0)
@@ -1547,9 +1547,9 @@ class TestDebugForkTracking(ForceCUDAGraphGC, unittest.TestCase):
                 torch.cuda.current_stream().wait_stream(side2)
         torch.cuda.current_stream().wait_stream(s)
 
-        with patch.object(pcg, "_DEBUG", True):
+        with patch.object(bcg, "_DEBUG", True):
             with self.assertRaises(RuntimeError) as cm:
-                with piecewise_graph(seq):
+                with breakable_graph(seq):
                     all_steps(buf, static_input)
 
         msg = str(cm.exception)
@@ -1594,9 +1594,9 @@ class TestDebugForkTracking(ForceCUDAGraphGC, unittest.TestCase):
                 torch.cuda.current_stream().wait_stream(side)
         torch.cuda.current_stream().wait_stream(s)
 
-        with patch.object(pcg, "_DEBUG", True):
+        with patch.object(bcg, "_DEBUG", True):
             with self.assertRaisesRegex(RuntimeError, "Unjoined side-stream id"):
-                with piecewise_graph(seq):
+                with breakable_graph(seq):
                     all_steps(buf, static_input)
 
 
@@ -1664,7 +1664,7 @@ class TestForkJoin(ForceCUDAGraphGC, parameterized.TestCase):
                 all_steps(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             all_steps(buf, static_input)
 
         for val in [3.0, 7.0]:
@@ -1729,7 +1729,7 @@ class TestUnjoinedStreamErrors(ForceCUDAGraphGC, parameterized.TestCase):
         with self.assertRaisesRegex(
             RuntimeError, "was not joined back to the capturing stream"
         ):
-            with piecewise_graph(seq):
+            with breakable_graph(seq):
                 buf.fill_(1.0)
                 fork()
                 with torch.cuda.stream(side):
@@ -1756,7 +1756,7 @@ class TestUnjoinedStreamErrors(ForceCUDAGraphGC, parameterized.TestCase):
         with self.assertRaisesRegex(
             RuntimeError, "was not joined back to the capturing stream"
         ):
-            with piecewise_graph(seq):
+            with breakable_graph(seq):
                 buf.fill_(1.0)
                 side.wait_stream(torch.cuda.current_stream())
                 with torch.cuda.stream(side):
@@ -1800,7 +1800,7 @@ class TestConcurrentCaptures(unittest.TestCase):
 
                 barrier.wait()
 
-                with piecewise_graph(
+                with breakable_graph(
                     seq,
                     stream=stream,
                     capture_error_mode="thread_local",
@@ -1855,7 +1855,7 @@ class TestEagerSegmentRetention(ForceCUDAGraphGC, unittest.TestCase):
                 consume(victim)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             consume(victim)
 
         ref = weakref.ref(victim)
@@ -1884,7 +1884,7 @@ class TestEagerSegmentRetention(ForceCUDAGraphGC, unittest.TestCase):
                 consume(buf)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with breakable_graph(seq):
             consume(buf)
 
         del buf
@@ -1900,8 +1900,8 @@ class TestEndSegmentErrorAttribution(unittest.TestCase):
     CPU -- they drive `_end_segment` with a fake graph context.
     """
 
-    def _piecewise_graph_with_failing_ctx(self, exc: Exception) -> piecewise_graph:
-        pg = piecewise_graph(CUDAGraphSequence())
+    def _breakable_graph_with_failing_ctx(self, exc: Exception) -> breakable_graph:
+        pg = breakable_graph(CUDAGraphSequence())
 
         class _FakeCtx:
             def __exit__(self, *args):
@@ -1911,7 +1911,7 @@ class TestEndSegmentErrorAttribution(unittest.TestCase):
         return pg
 
     def test_unjoined_error_is_reattributed(self):
-        pg = self._piecewise_graph_with_failing_ctx(
+        pg = self._breakable_graph_with_failing_ctx(
             RuntimeError("CUDA error: ... cudaErrorStreamCaptureUnjoined ...")
         )
         with self.assertRaisesRegex(
@@ -1920,7 +1920,7 @@ class TestEndSegmentErrorAttribution(unittest.TestCase):
             pg._end_segment()
 
     def test_other_capture_error_propagates(self):
-        pg = self._piecewise_graph_with_failing_ctx(
+        pg = self._breakable_graph_with_failing_ctx(
             RuntimeError("some unrelated capture failure")
         )
         with self.assertRaisesRegex(RuntimeError, "some unrelated capture failure"):

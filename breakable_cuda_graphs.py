@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Piecewise CUDA graphs for PyTorch."""
+"""Breakable CUDA graphs for PyTorch."""
 
 from __future__ import annotations
 
@@ -22,38 +22,38 @@ import torch.cuda._gpu_trace as _gpu_trace
 __version__ = "0.1.0"
 __all__ = [
     "CUDAGraphSequence",
-    "piecewise_graph",
+    "breakable_graph",
     "no_graph",
     "force_no_graph",
-    "is_in_piecewise_graph",
+    "is_in_breakable_graph",
 ]
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-_current_piecewise_graph_ctx: contextvars.ContextVar[piecewise_graph | None] = (
-    contextvars.ContextVar("current_piecewise_graph_ctx", default=None)
+_current_breakable_graph_ctx: contextvars.ContextVar[breakable_graph | None] = (
+    contextvars.ContextVar("current_breakable_graph_ctx", default=None)
 )
 
 
-def is_in_piecewise_graph() -> bool:
-    """Return ``True`` while inside an active :class:`piecewise_graph` capture."""
-    return _current_piecewise_graph_ctx.get() is not None
+def is_in_breakable_graph() -> bool:
+    """Return ``True`` while inside an active :class:`breakable_graph` capture."""
+    return _current_breakable_graph_ctx.get() is not None
 
 
 # Opt-in debug mode (read once at import). When on, the GPU-trace callbacks
 # below track side-stream fork/join so an unjoined-stream error can name the
 # offending stream id(s); it never changes capture behavior.
-_DEBUG: bool = os.environ.get("PIECEWISE_CUDA_GRAPHS_DEBUG", "0") == "1"
+_DEBUG: bool = os.environ.get("BREAKABLE_CUDA_GRAPHS_DEBUG", "0") == "1"
 
 
 def _on_event_record(event_id: int, stream_id: int) -> None:
-    ctx = _current_piecewise_graph_ctx.get()
+    ctx = _current_breakable_graph_ctx.get()
     if ctx is not None and _DEBUG:
         ctx._event_to_stream_id[event_id] = stream_id
 
 
 def _on_event_wait(event_id: int, stream_id: int) -> None:
-    ctx = _current_piecewise_graph_ctx.get()
+    ctx = _current_breakable_graph_ctx.get()
     if ctx is None or not _DEBUG:
         return
 
@@ -117,11 +117,11 @@ def _make_replay_tensor_alias(x: object) -> object:
 def no_graph(
     fn: Callable[..., Any] | None = None, *, enable: bool = True
 ) -> Callable[..., Any]:
-    """Run a function eagerly inside a :class:`piecewise_graph` capture.
+    """Run a function eagerly inside a :class:`breakable_graph` capture.
 
     Calls to a decorated function end the current CUDA graph segment, execute the
     function normally, record it as an eager replay step, and then begin a new
-    graph segment. Outside ``piecewise_graph`` capture, the wrapper calls the
+    graph segment. Outside ``breakable_graph`` capture, the wrapper calls the
     original function directly.
 
     Decorated functions must not return CUDA tensors. A CUDA tensor returned from
@@ -147,7 +147,7 @@ def no_graph(
 
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            ctx = _current_piecewise_graph_ctx.get()
+            ctx = _current_breakable_graph_ctx.get()
             if ctx is None:
                 return fn(*args, **kwargs)
 
@@ -217,9 +217,9 @@ class _EagerSegment:
 
 
 class CUDAGraphSequence:
-    """Capture output from :class:`piecewise_graph` that can be replayed.
+    """Capture output from :class:`breakable_graph` that can be replayed.
 
-    A sequence starts empty. Passing it to :class:`piecewise_graph` appends CUDA
+    A sequence starts empty. Passing it to :class:`breakable_graph` appends CUDA
     graph segments and eager ``@no_graph`` segments as capture progresses. Call
     :meth:`replay` to re-execute the captured sequence, or :meth:`reset` to drop
     all captured segments and reuse the object.
@@ -259,7 +259,7 @@ class CUDAGraphSequence:
         self._segments.clear()
 
 
-class piecewise_graph:
+class breakable_graph:
     """Capture CUDA work as multiple graph segments with eager breaks.
 
     This context manager behaves like :class:`torch.cuda.graph`, except calls to
@@ -286,7 +286,7 @@ class piecewise_graph:
         >>> seq = CUDAGraphSequence()
         >>> static_input = torch.empty(5, device="cuda")
         >>> static_output = torch.empty_like(static_input)
-        >>> with piecewise_graph(seq):
+        >>> with breakable_graph(seq):
         ...     static_input.mul_(2)
         ...     copy_to_buffer(static_output, static_input)
         ...     static_output.add_(1)
@@ -303,7 +303,7 @@ class piecewise_graph:
         self._stream = stream
         self._capture_error_mode = capture_error_mode
         self._graph_ctx: Any | None = None
-        self._token: contextvars.Token[piecewise_graph | None] | None = None
+        self._token: contextvars.Token[breakable_graph | None] | None = None
         self._capturing_stream: torch.cuda.Stream | None = None
         self._capturing_stream_id: int | None = None
         self._forked_stream_ids: set[int] = set()
@@ -350,7 +350,7 @@ class piecewise_graph:
             if "unjoined" not in text and "not joined" not in text:
                 raise
             msg = (
-                "piecewise_cuda_graphs: CUDA graph capture failed because a "
+                "breakable_cuda_graphs: CUDA graph capture failed because a "
                 "side stream was not joined back to the capturing stream before "
                 "entering an @no_graph function. Join the side stream before "
                 "the @no_graph call."
@@ -365,14 +365,14 @@ class piecewise_graph:
             if _DEBUG:
                 self._event_to_stream_id.clear()
 
-    def __enter__(self) -> piecewise_graph:
-        if _current_piecewise_graph_ctx.get() is not None:
-            raise RuntimeError("nested piecewise_graph captures are not supported")
+    def __enter__(self) -> breakable_graph:
+        if _current_breakable_graph_ctx.get() is not None:
+            raise RuntimeError("nested breakable_graph captures are not supported")
         self._begin_segment()
         if _DEBUG:
             self._capturing_stream = torch.cuda.current_stream()
             self._capturing_stream_id = self._capturing_stream.cuda_stream
-        self._token = _current_piecewise_graph_ctx.set(self)
+        self._token = _current_breakable_graph_ctx.set(self)
         return self
 
     def __exit__(
@@ -399,5 +399,5 @@ class piecewise_graph:
             if _DEBUG:
                 self._event_to_stream_id.clear()
             if self._token is not None:
-                _current_piecewise_graph_ctx.reset(self._token)
+                _current_breakable_graph_ctx.reset(self._token)
         return False

@@ -1,8 +1,8 @@
-# Piecewise CUDA Graphs - Design Document
+# Breakable CUDA Graphs - Design Document
 
 ## Overview
 
-`piecewise-cuda-graphs` is for workloads that should use CUDA graphs but contain
+`breakable-cuda-graphs` is for workloads that should use CUDA graphs but contain
 sections that are not CUDA-graph-compatible, or otherwise need to run eagerly.
 
 The core idea is simple: instead of capturing one CUDA graph, we capture a linear
@@ -20,11 +20,11 @@ introduced piecewise CUDA graphs for SGLang's model executor.
 - **`CUDAGraphSequence`** - owns the captured sequence. It stores CUDA graph
   segments and eager segments, owns the shared CUDA graph memory pool, and
   exposes `replay()`, `reset()`, and `pool()`.
-- **`piecewise_graph`** - context manager that captures work into a
+- **`breakable_graph`** - context manager that captures work into a
   `CUDAGraphSequence`. It forwards `stream` and `capture_error_mode` to
   `torch.cuda.graph` for each graph segment.
 - **`@no_graph`** - marks a function as an eager break. Inside a
-  `piecewise_graph` capture, the wrapper ends the current graph segment, runs the
+  `breakable_graph` capture, the wrapper ends the current graph segment, runs the
   function eagerly, records an eager segment, and starts the next graph segment.
   CUDA tensor returns are rejected; write CUDA outputs into argument buffers.
 - **`force_no_graph()`** - `@no_graph`-decorated no-op for explicit split points.
@@ -32,20 +32,20 @@ introduced piecewise CUDA graphs for SGLang's model executor.
 ## Architecture
 
 **Dynamic segmentation.** The CUDA-graph-captured regions are dynamic, not
-lexical. The user writes one `with piecewise_graph(seq):` block, and each
+lexical. The user writes one `with breakable_graph(seq):` block, and each
 `@no_graph` call splits the running capture wherever it occurs, including inside
 helper functions or nested call stacks. Each stretch of CUDA-graph-compatible
 execution between eager breaks is captured as its own graph segment.
 
 **Segment sequence.** Instead of capturing into a single `torch.cuda.CUDAGraph`,
 we capture those regions as a sequence of graph segments interleaved with eager
-segments. The sequence starts empty; `piecewise_graph` appends `CUDAGraph`
+segments. The sequence starts empty; `breakable_graph` appends `CUDAGraph`
 segments as `torch.cuda.graph` capture starts and eager segments when `@no_graph`
 functions run. On `replay()`, graph segments replay and eager segments call their
 stored functions.
 
 **Context tracking.** A `contextvars.ContextVar` holds the active
-`piecewise_graph`. `@no_graph` wrappers use it to detect whether they are inside
+`breakable_graph`. `@no_graph` wrappers use it to detect whether they are inside
 a capture. Outside capture they call through directly; inside capture they end
 the current graph segment, run eagerly, record an eager segment, and start the
 next graph segment.
@@ -70,7 +70,7 @@ segments share one pool" invariant is structural, not maintained per capture.
 Pools can be shared across sequences via `CUDAGraphSequence(pool=other.pool())`.
 
 **Side streams.** Ending a CUDA graph segment requires every participating side
-stream to be joined back to the capturing stream. In piecewise capture, this
+stream to be joined back to the capturing stream. In breakable capture, this
 matters at `@no_graph` boundaries because entering the eager function first ends
 the current graph segment:
 
@@ -82,7 +82,7 @@ main  --[kernel A]--+-------+ !! FAILS: side stream not joined
 side                  +--[kernel B]-- still dangling
 ```
 
-Joining side streams is the caller's responsibility; `piecewise-cuda-graphs` does
-not auto-join them. Debug mode (`PIECEWISE_CUDA_GRAPHS_DEBUG=1`) helps identify
+Joining side streams is the caller's responsibility; `breakable-cuda-graphs` does
+not auto-join them. Debug mode (`BREAKABLE_CUDA_GRAPHS_DEBUG=1`) helps identify
 missing joins by tracking fork/join events and appending still-unjoined stream
 id(s) to the error. It never joins streams or changes capture behavior.
