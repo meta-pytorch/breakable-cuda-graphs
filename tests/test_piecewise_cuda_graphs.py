@@ -45,6 +45,40 @@ class ForceCUDAGraphGC:
         super().tearDown()
 
 
+class RepairFailedCapture:
+    """Mixin for tests that deliberately fail a CUDA graph capture.
+
+    A capture that fails in cudaStreamEndCapture never reaches CUDAGraph's
+    capture epilogue, so the default CUDA generator is left in capture mode and
+    torch.cuda.graph never restores the ambient stream. Any later RNG op outside
+    a capture then fails with "Offset increment outside graph capture
+    encountered unexpectedly". Repairing both here keeps the damage inside the
+    test that caused it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._ambient_stream = torch.cuda.current_stream()
+
+    def tearDown(self):
+        torch.cuda.set_stream(self._ambient_stream)
+        generator = torch.cuda.default_generators[torch.cuda.current_device()]
+        generator.graphsafe_set_state(generator.clone_state())
+        super().tearDown()
+
+
+def distinct_streams(count: int) -> list[torch.cuda.Stream]:
+    """Allocate ``count`` streams that cannot alias each other.
+
+    torch.cuda.Stream() draws round-robin from a 32-slot pool that
+    torch.cuda.graph also takes its implicit capture stream from, so a side
+    stream can land on the capture stream and make forking onto it a no-op.
+    """
+    streams = [torch.cuda.Stream() for _ in range(count)]
+    assert len({stream.cuda_stream for stream in streams}) == count
+    return streams
+
+
 # ---------------------------------------------------------------------------
 # Basic capture and replay -- no @no_graph functions.
 # ---------------------------------------------------------------------------
@@ -466,7 +500,7 @@ class TestMixedOps(ForceCUDAGraphGC, unittest.TestCase):
         this exercises the common, correctly-joined path.)
         """
         buf = torch.empty(5, device="cuda")
-        side = torch.cuda.Stream()
+        side, capture_stream = distinct_streams(2)
 
         @no_graph
         def eager_step():
@@ -487,7 +521,7 @@ class TestMixedOps(ForceCUDAGraphGC, unittest.TestCase):
                 buf.add_(10.0)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with piecewise_graph(seq, stream=capture_stream):
             buf.fill_(1.0)
             side.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(side):
@@ -1508,7 +1542,7 @@ class TestDropInReplacement(unittest.TestCase):
 
 @pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
-class TestDebugForkTracking(ForceCUDAGraphGC, unittest.TestCase):
+class TestDebugForkTracking(RepairFailedCapture, ForceCUDAGraphGC, unittest.TestCase):
     def test_partial_join_reports_only_unjoined_stream(self):
         """Debug mode names the unjoined stream and omits the joined one.
 
@@ -1518,8 +1552,7 @@ class TestDebugForkTracking(ForceCUDAGraphGC, unittest.TestCase):
         """
         static_input = torch.empty(5, device="cuda")
         buf = torch.empty(5, device="cuda")
-        side1 = torch.cuda.Stream()
-        side2 = torch.cuda.Stream()
+        side1, side2, capture_stream = distinct_streams(3)
 
         @no_graph
         def eager_step(x: torch.Tensor):
@@ -1549,7 +1582,7 @@ class TestDebugForkTracking(ForceCUDAGraphGC, unittest.TestCase):
 
         with patch.object(pcg, "_DEBUG", True):
             with self.assertRaises(RuntimeError) as cm:
-                with piecewise_graph(seq):
+                with piecewise_graph(seq, stream=capture_stream):
                     all_steps(buf, static_input)
 
         msg = str(cm.exception)
@@ -1566,7 +1599,7 @@ class TestDebugForkTracking(ForceCUDAGraphGC, unittest.TestCase):
         """
         static_input = torch.empty(5, device="cuda")
         buf = torch.empty(5, device="cuda")
-        side = torch.cuda.Stream()
+        side, capture_stream = distinct_streams(2)
 
         @no_graph
         def eager_step(x: torch.Tensor):
@@ -1596,7 +1629,7 @@ class TestDebugForkTracking(ForceCUDAGraphGC, unittest.TestCase):
 
         with patch.object(pcg, "_DEBUG", True):
             with self.assertRaisesRegex(RuntimeError, "Unjoined side-stream id"):
-                with piecewise_graph(seq):
+                with piecewise_graph(seq, stream=capture_stream):
                     all_steps(buf, static_input)
 
 
@@ -1615,7 +1648,7 @@ class TestForkJoin(ForceCUDAGraphGC, parameterized.TestCase):
         ("mixed", "event", "wait_stream"),
     )
     def test_fork_join_variants(self, fork_method: str, join_method: str):
-        side = torch.cuda.Stream()
+        side, capture_stream = distinct_streams(2)
 
         def fork_wait_stream():
             side.wait_stream(torch.cuda.current_stream())
@@ -1664,7 +1697,7 @@ class TestForkJoin(ForceCUDAGraphGC, parameterized.TestCase):
                 all_steps(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        with piecewise_graph(seq):
+        with piecewise_graph(seq, stream=capture_stream):
             all_steps(buf, static_input)
 
         for val in [3.0, 7.0]:
@@ -1683,7 +1716,9 @@ class TestForkJoin(ForceCUDAGraphGC, parameterized.TestCase):
 
 @pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
-class TestUnjoinedStreamErrors(ForceCUDAGraphGC, parameterized.TestCase):
+class TestUnjoinedStreamErrors(
+    RepairFailedCapture, ForceCUDAGraphGC, parameterized.TestCase
+):
     @parameterized.named_parameters(
         ("wait_stream", "wait_stream"),
         ("event", "event"),
@@ -1691,7 +1726,7 @@ class TestUnjoinedStreamErrors(ForceCUDAGraphGC, parameterized.TestCase):
     def test_unjoined_stream_error_at_no_graph(self, fork_method: str):
         """A side stream left unjoined at a no-graph boundary raises -- whether
         it was forked via wait_stream or via an event."""
-        side = torch.cuda.Stream()
+        side, capture_stream = distinct_streams(2)
 
         def fork_wait_stream():
             side.wait_stream(torch.cuda.current_stream())
@@ -1729,7 +1764,7 @@ class TestUnjoinedStreamErrors(ForceCUDAGraphGC, parameterized.TestCase):
         with self.assertRaisesRegex(
             RuntimeError, "was not joined back to the capturing stream"
         ):
-            with piecewise_graph(seq):
+            with piecewise_graph(seq, stream=capture_stream):
                 buf.fill_(1.0)
                 fork()
                 with torch.cuda.stream(side):
@@ -1738,7 +1773,7 @@ class TestUnjoinedStreamErrors(ForceCUDAGraphGC, parameterized.TestCase):
 
     def test_unjoined_stream_error_at_end_of_capture(self):
         buf = torch.empty(5, device="cuda")
-        side = torch.cuda.Stream()
+        side, capture_stream = distinct_streams(2)
 
         seq = CUDAGraphSequence()
 
@@ -1756,7 +1791,7 @@ class TestUnjoinedStreamErrors(ForceCUDAGraphGC, parameterized.TestCase):
         with self.assertRaisesRegex(
             RuntimeError, "was not joined back to the capturing stream"
         ):
-            with piecewise_graph(seq):
+            with piecewise_graph(seq, stream=capture_stream):
                 buf.fill_(1.0)
                 side.wait_stream(torch.cuda.current_stream())
                 with torch.cuda.stream(side):
