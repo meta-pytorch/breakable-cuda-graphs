@@ -30,7 +30,8 @@ between captured graph segments.
 
 ```python
 import torch
-from breakable_cuda_graphs import CUDAGraphSequence, no_graph, breakable_graph
+from breakable_cuda_graphs import CUDAGraphSequence, breakable_graph, no_graph
+
 
 @no_graph
 def dynamic_scale(x: torch.Tensor) -> None:
@@ -38,14 +39,17 @@ def dynamic_scale(x: torch.Tensor) -> None:
     if x.sum().item() > 0:
         x.clamp_(min=0)
 
+
 # Pre-allocate static buffers.
 static_input = torch.empty(1024, device="cuda")
 result = torch.empty(1024, device="cuda")
+
 
 def workload(src: torch.Tensor, dst: torch.Tensor) -> None:
     dst.copy_(src * 2)
     dynamic_scale(dst)  # ends the current graph segment and runs eagerly
     dst.add_(1.0)
+
 
 # Warm up on a side stream, as required by CUDA graphs.
 s = torch.cuda.Stream()
@@ -85,7 +89,7 @@ seq.replay()
 for debugging or isolating capture regions.
 
 ```python
-from breakable_cuda_graphs import CUDAGraphSequence, force_no_graph, breakable_graph
+from breakable_cuda_graphs import CUDAGraphSequence, breakable_graph, force_no_graph
 
 seq = CUDAGraphSequence()
 with breakable_graph(seq):
