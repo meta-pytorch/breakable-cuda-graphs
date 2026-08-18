@@ -1,10 +1,10 @@
-# Piecewise CUDA Graphs
+# Breakable CUDA Graphs
 
-Piecewise CUDA Graphs extends the standard PyTorch CUDA graph workflow.
+Breakable CUDA Graphs extends the standard PyTorch CUDA graph workflow.
 
 With `torch.cuda.graph`, one context manager captures one CUDA graph. That works
-well when the whole region is capture-compatible. `piecewise-cuda-graphs` keeps
-the same capture/replay shape, but lets one `with piecewise_graph(...)` block
+well when the whole region is capture-compatible. `breakable-cuda-graphs` keeps
+the same capture/replay shape, but lets one `with breakable_graph(...)` block
 produce a sequence of CUDA graph segments separated by explicit eager breaks. If
 no eager breaks occur, the block is captured as a single graph segment.
 
@@ -18,8 +18,8 @@ constraints below.
 Install from source into an environment with PyTorch and CUDA support:
 
 ```bash
-git clone https://github.com/meta-pytorch/piecewise-cuda-graphs.git
-cd piecewise-cuda-graphs
+git clone https://github.com/meta-pytorch/breakable-cuda-graphs.git
+cd breakable-cuda-graphs
 pip install -e .
 ```
 
@@ -30,7 +30,7 @@ between captured graph segments.
 
 ```python
 import torch
-from piecewise_cuda_graphs import CUDAGraphSequence, no_graph, piecewise_graph
+from breakable_cuda_graphs import CUDAGraphSequence, no_graph, breakable_graph
 
 @no_graph
 def dynamic_scale(x: torch.Tensor) -> None:
@@ -58,7 +58,7 @@ torch.cuda.current_stream().wait_stream(s)
 
 # Capture.
 seq = CUDAGraphSequence()
-with piecewise_graph(seq):
+with breakable_graph(seq):
     workload(static_input, result)
 
 # Replay with new data by overwriting the static input buffer.
@@ -71,8 +71,8 @@ seq.replay()
 - `@no_graph` functions must not return CUDA tensors. Write CUDA outputs into
   pre-allocated buffers passed as arguments.
 - Side streams must be joined back to the capturing stream before entering an
-  `@no_graph` function or leaving the `piecewise_graph` context. Set
-  `PIECEWISE_CUDA_GRAPHS_DEBUG=1` to add still-unjoined stream id(s) to the
+  `@no_graph` function or leaving the `breakable_graph` context. Set
+  `BREAKABLE_CUDA_GRAPHS_DEBUG=1` to add still-unjoined stream id(s) to the
   resulting error.
 - Usual CUDA graph constraints still apply: replay uses the same tensor addresses
   captured during warmup/capture.
@@ -85,10 +85,10 @@ seq.replay()
 for debugging or isolating capture regions.
 
 ```python
-from piecewise_cuda_graphs import CUDAGraphSequence, force_no_graph, piecewise_graph
+from breakable_cuda_graphs import CUDAGraphSequence, force_no_graph, breakable_graph
 
 seq = CUDAGraphSequence()
-with piecewise_graph(seq):
+with breakable_graph(seq):
     a = step1(x)
     force_no_graph()
     b = step2(a)
@@ -101,11 +101,11 @@ can also share pools across sequences:
 
 ```python
 seq1 = CUDAGraphSequence()
-with piecewise_graph(seq1):
+with breakable_graph(seq1):
     workload_a(buf_a, src_a)
 
 seq2 = CUDAGraphSequence(pool=seq1.pool())
-with piecewise_graph(seq2):
+with breakable_graph(seq2):
     workload_b(buf_b, src_b)
 ```
 
@@ -113,10 +113,10 @@ with piecewise_graph(seq2):
 
 - **`CUDAGraphSequence(pool=None)`**: captured graph/eager segment sequence.
   Methods: `replay()`, `reset()`, `pool()`.
-- **`piecewise_graph(seq, stream=None, capture_error_mode="global")`**: capture
+- **`breakable_graph(seq, stream=None, capture_error_mode="global")`**: capture
   context, analogous to `torch.cuda.graph`.
 - **`@no_graph` / `@no_graph(enable=...)`**: mark functions that run eagerly
-  inside `piecewise_graph`.
+  inside `breakable_graph`.
 - **`force_no_graph()`**: explicit split point with no eager work.
 
 For implementation details, see [DESIGN.md](DESIGN.md).
