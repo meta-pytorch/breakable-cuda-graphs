@@ -134,6 +134,10 @@ def no_graph(
     Can be used as ``@no_graph`` or ``@no_graph(enable=True)``. Passing
     ``enable=False`` leaves the function unchanged.
 
+    If the enclosing :class:`breakable_graph` was given a ``barrier_fn``, it runs
+    at capture between ending the preceding segment and calling the decorated
+    function.
+
     Args:
         fn: Function to decorate. Leave as ``None`` when using the configured
             form, e.g. ``@no_graph(enable=...)``.
@@ -152,6 +156,8 @@ def no_graph(
                 return fn(*args, **kwargs)
 
             ctx._end_segment()
+
+            ctx._barrier()
 
             captured_result = fn(*args, **kwargs)
 
@@ -277,6 +283,9 @@ class breakable_graph:
             argument of :class:`torch.cuda.graph`.
         capture_error_mode: CUDA stream-capture error mode forwarded to
             :class:`torch.cuda.graph`.
+        barrier_fn: Optional zero-argument callable run before each eager break,
+            after the preceding graph segment has ended. Runs during capture
+            only, not on replay. Its return value is discarded.
 
     Example:
         >>> @no_graph
@@ -298,10 +307,14 @@ class breakable_graph:
         cuda_graph_sequence: CUDAGraphSequence,
         stream: torch.cuda.Stream | None = None,
         capture_error_mode: str = "global",
+        barrier_fn: Callable[[], Any] | None = None,
     ) -> None:
+        if barrier_fn is not None and not callable(barrier_fn):
+            raise TypeError(f"`barrier_fn` must be callable, got {type(barrier_fn)}")
         self._seq = cuda_graph_sequence
         self._stream = stream
         self._capture_error_mode = capture_error_mode
+        self._barrier_fn = barrier_fn
         self._graph_ctx: Any | None = None
         self._token: contextvars.Token[breakable_graph | None] | None = None
         self._capturing_stream: torch.cuda.Stream | None = None
@@ -327,6 +340,10 @@ class breakable_graph:
     ) -> None:
         assert not self._is_capturing()
         self._seq._append_eager(fn, args, kwargs)
+
+    def _barrier(self) -> None:
+        if self._barrier_fn is not None:
+            self._barrier_fn()
 
     def _is_capturing(self) -> bool:
         return self._graph_ctx is not None

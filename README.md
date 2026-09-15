@@ -117,8 +117,10 @@ with breakable_graph(seq2):
 
 - **`CUDAGraphSequence(pool=None)`**: captured graph/eager segment sequence.
   Methods: `replay()`, `reset()`, `pool()`.
-- **`breakable_graph(seq, stream=None, capture_error_mode="global")`**: capture
-  context, analogous to `torch.cuda.graph`.
+- **`breakable_graph(seq, stream=None, capture_error_mode="global",
+  barrier_fn=None)`**: capture context, analogous to `torch.cuda.graph`.
+  `barrier_fn` is an optional zero-argument callable run before each eager break
+  during capture.
 - **`@no_graph` / `@no_graph(enable=...)`**: mark functions that run eagerly
   inside `breakable_graph`.
 - **`force_no_graph()`**: explicit split point with no eager work.

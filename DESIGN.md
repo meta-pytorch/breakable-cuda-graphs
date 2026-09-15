@@ -64,6 +64,14 @@ tensors, including nested CUDA tensors, raises at capture time. Write outputs
 into a pre-allocated buffer argument instead. Other returns, such as scalars or
 CPU tensors, are allowed.
 
+**Barriers between segments.** `breakable_graph` takes an optional `barrier_fn`
+run at every break, after `_end_segment()` and before the eager function, during
+capture only. Ending a segment builds a CUDA graph on the host, while replay
+only launches segments that are already built, so there is no equivalent gap on
+the replay path. The barrier therefore lives on the `breakable_graph` context
+rather than on the recorded segments, and `_EagerSegment` stays a plain function
+call.
+
 **Memory pool sharing.** The memory pool is owned by the `CUDAGraphSequence`
 (lazily created on first use), and every segment captures into it - so the "all
 segments share one pool" invariant is structural, not maintained per capture.
