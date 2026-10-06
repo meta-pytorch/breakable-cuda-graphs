@@ -74,6 +74,16 @@ call. Segment finalization can take different amounts of host time across
 distributed ranks; the barrier can re-align them before an eager break containing
 rank-coupled work.
 
+**Capture stubs.** A `no_graph` break may provide a `capture_stub`, which runs in
+place of the eager function during capture only. The real function is still
+recorded as the eager replay step. This lets capture skip expensive or
+rank-coupled eager work when its values are not needed to construct the following
+graph segment. The stub receives the same arguments and follows the same rule as
+the real function: CUDA outputs must be written into pre-allocated argument
+buffers rather than returned. Its return value feeds the remainder of the
+capture pass and must be compatible with the caller's use of the real return
+value.
+
 **Memory pool sharing.** The memory pool is owned by the `CUDAGraphSequence`
 (lazily created on first use), and every segment captures into it - so the "all
 segments share one pool" invariant is structural, not maintained per capture.

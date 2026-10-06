@@ -423,6 +423,67 @@ class TestNoGraphPlacement(parameterized.TestCase):
 
 @pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
+class TestCaptureStub(unittest.TestCase):
+    def test_stub_runs_at_capture_and_real_function_runs_on_replay(self):
+        events = []
+        static_input = torch.empty(5, device="cuda")
+        buf = torch.empty(5, device="cuda")
+
+        def stub(x: torch.Tensor):
+            events.append("stub")
+            x.zero_()
+
+        @no_graph(capture_stub=stub)
+        def step(x: torch.Tensor):
+            events.append("real")
+            x.mul_(3.0)
+
+        def workload(buf: torch.Tensor, src: torch.Tensor):
+            buf.copy_(src)
+            step(buf)
+            buf.add_(1.0)
+
+        # Outside capture, the real function is used.
+        buf.fill_(2.0)
+        step(buf)
+        self.assertEqual(events, ["real"])
+        self.assertTrue(torch.equal(buf, torch.full((5,), 6.0, device="cuda")))
+
+        events.clear()
+        seq = CUDAGraphSequence()
+        with breakable_graph(seq, barrier_fn=lambda: events.append("barrier")):
+            workload(buf, static_input)
+        self.assertEqual(events, ["barrier", "stub"])
+
+        for val in [2.0, 5.0]:
+            events.clear()
+            static_input.fill_(val)
+            seq.replay()
+            self.assertEqual(events, ["real"])
+            self.assertTrue(
+                torch.equal(buf, torch.full((5,), val * 3.0 + 1.0, device="cuda"))
+            )
+
+
+class TestCaptureStubConfiguration(unittest.TestCase):
+    def test_non_callable_capture_stub_raises(self):
+        with self.assertRaisesRegex(TypeError, "`capture_stub` must be callable"):
+            no_graph(capture_stub="not callable")
+
+    def test_disabled_decorator_returns_original_function(self):
+        def stub():
+            raise AssertionError("stub must not run")
+
+        def fn():
+            return "real"
+
+        decorated = no_graph(enable=False, capture_stub=stub)(fn)
+        self.assertIs(decorated, fn)
+        self.assertEqual(decorated(), "real")
+
+
+@pytest.mark.gpus_needed_1
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestBarrierFn(unittest.TestCase):
     def test_barrier_runs_at_capture_not_on_replay(self):
         events = []
