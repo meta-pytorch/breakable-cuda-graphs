@@ -157,7 +157,10 @@ def no_graph(
 
             ctx._end_segment()
 
-            ctx._barrier()
+            # Segment finalization can take different amounts of host time across
+            # distributed ranks. Re-align them before rank-coupled eager work.
+            if ctx._barrier_fn is not None:
+                ctx._barrier_fn()
 
             captured_result = fn(*args, **kwargs)
 
@@ -285,7 +288,9 @@ class breakable_graph:
             :class:`torch.cuda.graph`.
         barrier_fn: Optional zero-argument callable run before each eager break,
             after the preceding graph segment has ended. Runs during capture
-            only, not on replay. Its return value is discarded.
+            only, not on replay. This can re-align distributed ranks before an
+            eager break containing rank-coupled work. Its return value is
+            discarded.
 
     Example:
         >>> @no_graph
@@ -340,10 +345,6 @@ class breakable_graph:
     ) -> None:
         assert not self._is_capturing()
         self._seq._append_eager(fn, args, kwargs)
-
-    def _barrier(self) -> None:
-        if self._barrier_fn is not None:
-            self._barrier_fn()
 
     def _is_capturing(self) -> bool:
         return self._graph_ctx is not None

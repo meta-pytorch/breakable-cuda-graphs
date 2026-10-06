@@ -70,7 +70,9 @@ capture only. Ending a segment builds a CUDA graph on the host, while replay
 only launches segments that are already built, so there is no equivalent gap on
 the replay path. The barrier therefore lives on the `breakable_graph` context
 rather than on the recorded segments, and `_EagerSegment` stays a plain function
-call.
+call. Segment finalization can take different amounts of host time across
+distributed ranks; the barrier can re-align them before an eager break containing
+rank-coupled work.
 
 **Memory pool sharing.** The memory pool is owned by the `CUDAGraphSequence`
 (lazily created on first use), and every segment captures into it - so the "all
