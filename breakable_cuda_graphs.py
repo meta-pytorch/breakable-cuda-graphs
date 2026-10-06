@@ -21,7 +21,7 @@ import torch.cuda._gpu_trace as _gpu_trace
 
 __version__ = "0.1.0"
 __all__ = [
-    "CUDAGraphSequence",
+    "BreakableCUDAGraph",
     "breakable_graph",
     "no_graph",
     "force_no_graph",
@@ -221,7 +221,7 @@ class _EagerSegment:
 
     Holds a no-graph function plus non-owning argument-buffer views, and exposes
     the same ``replay()`` / ``reset()`` methods as :class:`torch.cuda.CUDAGraph`
-    so :class:`CUDAGraphSequence` can replay all segments uniformly.
+    so :class:`BreakableCUDAGraph` can replay all segments uniformly.
     """
 
     __slots__ = ("fn", "args", "kwargs")
@@ -241,7 +241,7 @@ class _EagerSegment:
         pass
 
 
-class CUDAGraphSequence:
+class BreakableCUDAGraph:
     """Capture output from :class:`breakable_graph` that can be replayed.
 
     A sequence starts empty. Passing it to :class:`breakable_graph` appends CUDA
@@ -290,14 +290,14 @@ class breakable_graph:
     This context manager behaves like :class:`torch.cuda.graph`, except calls to
     functions decorated with :func:`no_graph` run eagerly and split capture into
     separate CUDA graph segments. The resulting segments are appended to the
-    provided :class:`CUDAGraphSequence`, which can then replay the full sequence.
+    provided :class:`BreakableCUDAGraph`, which can then replay the full sequence.
 
     For concurrent captures from multiple threads with no-graph regions, use
     ``thread_local`` capture error mode and separate streams per thread.
 
     Args:
-        cuda_graph_sequence: Sequence that receives captured graph segments and
-            eager no-graph segments.
+        cuda_graph: Breakable CUDA graph that receives captured graph segments
+            and eager no-graph segments.
         stream: Optional side stream to use for capture. Matches the ``stream``
             argument of :class:`torch.cuda.graph`.
         capture_error_mode: CUDA stream-capture error mode forwarded to
@@ -313,26 +313,26 @@ class breakable_graph:
         ... def copy_to_buffer(dst: torch.Tensor, src: torch.Tensor) -> None:
         ...     dst.copy_(src)
         ...
-        >>> seq = CUDAGraphSequence()
+        >>> graph = BreakableCUDAGraph()
         >>> static_input = torch.empty(5, device="cuda")
         >>> static_output = torch.empty_like(static_input)
-        >>> with breakable_graph(seq):
+        >>> with breakable_graph(graph):
         ...     static_input.mul_(2)
         ...     copy_to_buffer(static_output, static_input)
         ...     static_output.add_(1)
-        >>> seq.replay()
+        >>> graph.replay()
     """
 
     def __init__(
         self,
-        cuda_graph_sequence: CUDAGraphSequence,
+        cuda_graph: BreakableCUDAGraph,
         stream: torch.cuda.Stream | None = None,
         capture_error_mode: str = "global",
         barrier_fn: Callable[[], Any] | None = None,
     ) -> None:
         if barrier_fn is not None and not callable(barrier_fn):
             raise TypeError(f"`barrier_fn` must be callable, got {type(barrier_fn)}")
-        self._seq = cuda_graph_sequence
+        self._cuda_graph = cuda_graph
         self._stream = stream
         self._capture_error_mode = capture_error_mode
         self._barrier_fn = barrier_fn
@@ -348,7 +348,7 @@ class breakable_graph:
     def _new_graph_ctx(self, g: torch.cuda.CUDAGraph) -> None:
         self._graph_ctx = torch.cuda.graph(
             g,
-            pool=self._seq.pool(),
+            pool=self._cuda_graph.pool(),
             stream=self._stream,
             capture_error_mode=self._capture_error_mode,
         )
@@ -360,13 +360,13 @@ class breakable_graph:
         self, fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> None:
         assert not self._is_capturing()
-        self._seq._append_eager(fn, args, kwargs)
+        self._cuda_graph._append_eager(fn, args, kwargs)
 
     def _is_capturing(self) -> bool:
         return self._graph_ctx is not None
 
     def _begin_segment(self) -> None:
-        g = self._seq._append_graph()
+        g = self._cuda_graph._append_graph()
         self._new_graph_ctx(g)
         graph_ctx = self._graph_ctx
         assert graph_ctx is not None

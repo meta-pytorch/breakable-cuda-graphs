@@ -30,7 +30,7 @@ between captured graph segments.
 
 ```python
 import torch
-from breakable_cuda_graphs import CUDAGraphSequence, breakable_graph, no_graph
+from breakable_cuda_graphs import BreakableCUDAGraph, breakable_graph, no_graph
 
 
 @no_graph
@@ -61,13 +61,13 @@ with torch.cuda.stream(s):
 torch.cuda.current_stream().wait_stream(s)
 
 # Capture.
-seq = CUDAGraphSequence()
-with breakable_graph(seq):
+graph = BreakableCUDAGraph()
+with breakable_graph(graph):
     workload(static_input, result)
 
 # Replay with new data by overwriting the static input buffer.
 static_input.fill_(5.0)
-seq.replay()
+graph.replay()
 ```
 
 ## Constraints
@@ -89,10 +89,10 @@ seq.replay()
 for debugging or isolating capture regions.
 
 ```python
-from breakable_cuda_graphs import CUDAGraphSequence, breakable_graph, force_no_graph
+from breakable_cuda_graphs import BreakableCUDAGraph, breakable_graph, force_no_graph
 
-seq = CUDAGraphSequence()
-with breakable_graph(seq):
+graph = BreakableCUDAGraph()
+with breakable_graph(graph):
     a = step1(x)
     force_no_graph()
     b = step2(a)
@@ -121,20 +121,20 @@ All graph segments within a sequence share the same CUDA graph memory pool. You
 can also share pools across sequences:
 
 ```python
-seq1 = CUDAGraphSequence()
+seq1 = BreakableCUDAGraph()
 with breakable_graph(seq1):
     workload_a(buf_a, src_a)
 
-seq2 = CUDAGraphSequence(pool=seq1.pool())
+seq2 = BreakableCUDAGraph(pool=seq1.pool())
 with breakable_graph(seq2):
     workload_b(buf_b, src_b)
 ```
 
 ## Reference
 
-- **`CUDAGraphSequence(pool=None)`**: captured graph/eager segment sequence.
+- **`BreakableCUDAGraph(pool=None)`**: captured graph/eager segment sequence.
   Methods: `replay()`, `reset()`, `pool()`.
-- **`breakable_graph(seq, stream=None, capture_error_mode="global",
+- **`breakable_graph(graph, stream=None, capture_error_mode="global",
   barrier_fn=None)`**: capture context, analogous to `torch.cuda.graph`.
   `barrier_fn` is an optional zero-argument callable run before each eager break
   during capture. It can re-align distributed ranks after segment finalization
