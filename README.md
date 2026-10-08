@@ -98,6 +98,23 @@ with breakable_graph(seq):
     b = step2(a)
 ```
 
+### Replacing eager work during capture
+
+An eager break can use a cheaper `capture_stub` while the surrounding graph
+segments are being constructed. Replay always calls the real function. Both
+callables receive the same arguments; CUDA outputs must use pre-allocated
+argument buffers.
+
+```python
+def initialize_output(output: torch.Tensor, x: torch.Tensor) -> None:
+    output.zero_()
+
+
+@no_graph(capture_stub=initialize_output)
+def distributed_step(output: torch.Tensor, x: torch.Tensor) -> None:
+    run_distributed_operation(output, x)
+```
+
 ### Sharing memory pools
 
 All graph segments within a sequence share the same CUDA graph memory pool. You
@@ -122,8 +139,9 @@ with breakable_graph(seq2):
   `barrier_fn` is an optional zero-argument callable run before each eager break
   during capture. It can re-align distributed ranks after segment finalization
   and before rank-coupled eager work.
-- **`@no_graph` / `@no_graph(enable=...)`**: mark functions that run eagerly
-  inside `breakable_graph`.
+- **`@no_graph` / `@no_graph(enable=..., capture_stub=...)`**: mark functions
+  that run eagerly inside `breakable_graph`. An optional `capture_stub` replaces
+  the eager body during capture only; replay calls the original function.
 - **`force_no_graph()`**: explicit split point with no eager work.
 
 For implementation details, see [DESIGN.md](DESIGN.md).

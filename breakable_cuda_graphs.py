@@ -115,7 +115,10 @@ def _make_replay_tensor_alias(x: object) -> object:
 
 
 def no_graph(
-    fn: Callable[..., Any] | None = None, *, enable: bool = True
+    fn: Callable[..., Any] | None = None,
+    *,
+    enable: bool = True,
+    capture_stub: Callable[..., Any] | None = None,
 ) -> Callable[..., Any]:
     """Run a function eagerly inside a :class:`breakable_graph` capture.
 
@@ -132,7 +135,12 @@ def no_graph(
     tensors are allowed.
 
     Can be used as ``@no_graph`` or ``@no_graph(enable=True)``. Passing
-    ``enable=False`` leaves the function unchanged.
+    ``enable=False`` leaves the function unchanged. ``capture_stub`` can replace
+    the function body during capture; replay still calls the original function.
+    The stub receives the same arguments and must follow the same return-value
+    restrictions as the decorated function. Its return value is used by the
+    remainder of the capture pass, so it must also be compatible with how the
+    caller uses the real function's return value.
 
     If the enclosing :class:`breakable_graph` was given a ``barrier_fn``, it runs
     at capture between ending the preceding segment and calling the decorated
@@ -143,7 +151,14 @@ def no_graph(
             form, e.g. ``@no_graph(enable=...)``.
         enable: Whether to apply the eager-break wrapper. When ``False``,
             ``fn`` is returned unchanged.
+        capture_stub: Optional callable used instead of ``fn`` during capture
+            only. Useful when the real eager body is expensive or contains
+            rank-coupled work whose results are not needed while constructing
+            the surrounding graph segments.
     """
+
+    if capture_stub is not None and not callable(capture_stub):
+        raise TypeError(f"`capture_stub` must be callable, got {type(capture_stub)}")
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         if not enable:
@@ -162,7 +177,8 @@ def no_graph(
             if ctx._barrier_fn is not None:
                 ctx._barrier_fn()
 
-            captured_result = fn(*args, **kwargs)
+            capture_fn = capture_stub if capture_stub is not None else fn
+            captured_result = capture_fn(*args, **kwargs)
 
             result_leaves, _ = torch.utils._pytree.tree_flatten(captured_result)
             if any(_is_cuda_tensor(leaf) for leaf in result_leaves):
