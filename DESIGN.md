@@ -9,7 +9,7 @@ The core idea is simple: instead of capturing one CUDA graph, we capture a linea
 sequence of segments. Normal CUDA work is captured into `torch.cuda.CUDAGraph`
 objects. Calls to `@no_graph` functions end the current segment, run eagerly,
 record an eager replay step, and start the next graph segment.
-`CUDAGraphSequence.replay()` replays that mixed sequence in order.
+`BreakableCUDAGraph.replay()` replays that mixed sequence in order.
 
 This work was inspired by
 [SGLang PR #19102](https://github.com/sgl-project/sglang/pull/19102), which
@@ -17,11 +17,11 @@ introduced breakable CUDA graphs for SGLang's model executor.
 
 ## API
 
-- **`CUDAGraphSequence`** - owns the captured sequence. It stores CUDA graph
+- **`BreakableCUDAGraph`** - owns the captured sequence. It stores CUDA graph
   segments and eager segments, owns the shared CUDA graph memory pool, and
   exposes `replay()`, `reset()`, and `pool()`.
 - **`breakable_graph`** - context manager that captures work into a
-  `CUDAGraphSequence`. It forwards `stream` and `capture_error_mode` to
+  `BreakableCUDAGraph`. It forwards `stream` and `capture_error_mode` to
   `torch.cuda.graph` for each graph segment.
 - **`@no_graph`** - marks a function as an eager break. Inside a
   `breakable_graph` capture, the wrapper ends the current graph segment, runs the
@@ -32,7 +32,7 @@ introduced breakable CUDA graphs for SGLang's model executor.
 ## Architecture
 
 **Dynamic segmentation.** The CUDA-graph-captured regions are dynamic, not
-lexical. The user writes one `with breakable_graph(seq):` block, and each
+lexical. The user writes one `with breakable_graph(graph):` block, and each
 `@no_graph` call splits the running capture wherever it occurs, including inside
 helper functions or nested call stacks. Each stretch of CUDA-graph-compatible
 execution between eager breaks is captured as its own graph segment.
@@ -84,10 +84,10 @@ buffers rather than returned. Its return value feeds the remainder of the
 capture pass and must be compatible with the caller's use of the real return
 value.
 
-**Memory pool sharing.** The memory pool is owned by the `CUDAGraphSequence`
+**Memory pool sharing.** The memory pool is owned by the `BreakableCUDAGraph`
 (lazily created on first use), and every segment captures into it - so the "all
 segments share one pool" invariant is structural, not maintained per capture.
-Pools can be shared across sequences via `CUDAGraphSequence(pool=other.pool())`.
+Pools can be shared across sequences via `BreakableCUDAGraph(pool=other.pool())`.
 
 **Side streams.** Ending a CUDA graph segment requires every participating side
 stream to be joined back to the capturing stream. In breakable capture, this

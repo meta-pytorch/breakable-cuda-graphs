@@ -20,7 +20,7 @@ import torch
 from absl.testing import parameterized
 from breakable_cuda_graphs import (
     breakable_graph,
-    CUDAGraphSequence,
+    BreakableCUDAGraph,
     force_no_graph,
     is_in_breakable_graph,
     no_graph,
@@ -85,11 +85,20 @@ def distinct_streams(count: int) -> list[torch.cuda.Stream]:
 # ---------------------------------------------------------------------------
 
 
+class TestPublicAPI(unittest.TestCase):
+    def test_breakable_cuda_graph_name_and_keyword(self):
+        graph = BreakableCUDAGraph()
+        capture = breakable_graph(cuda_graph=graph)
+
+        self.assertIs(bcg.BreakableCUDAGraph, BreakableCUDAGraph)
+        self.assertIs(capture._cuda_graph, graph)
+
+
 @pytest.mark.gpus_needed_1
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestBasicCapture(unittest.TestCase):
     def test_basic_capture_and_replay(self):
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         static_input = torch.empty(5, device="cuda")
 
         s = torch.cuda.Stream()
@@ -137,7 +146,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
             step2(buf)
             step3(buf)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -177,7 +186,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
             step1(buf, src)
             step2(buf)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -218,7 +227,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
             step1(buf, src)
             step2(buf)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -268,7 +277,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
             force_no_graph()
             force_no_graph()
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -311,7 +320,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
                     break_fn()
                     x.add_(1.0)
 
-                seq = CUDAGraphSequence()
+                seq = BreakableCUDAGraph()
 
                 s = torch.cuda.Stream()
                 s.wait_stream(torch.cuda.current_stream())
@@ -356,7 +365,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
             step2(buf)
             step3(buf)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -400,7 +409,7 @@ class TestNoGraphPlacement(parameterized.TestCase):
             scaler.scale(buf)
             buf.add_(1.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -450,7 +459,7 @@ class TestCaptureStub(unittest.TestCase):
         self.assertTrue(torch.equal(buf, torch.full((5,), 6.0, device="cuda")))
 
         events.clear()
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         with breakable_graph(seq, barrier_fn=lambda: events.append("barrier")):
             workload(buf, static_input)
         self.assertEqual(events, ["barrier", "stub"])
@@ -505,7 +514,7 @@ class TestBarrierFn(unittest.TestCase):
             step_a(buf)
             step_b(buf)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -572,7 +581,7 @@ def _tp_barrier_worker(rank: int, world_size: int, init_file: str, out_q) -> Non
                 workload(buf, static_input)
         torch.cuda.current_stream().wait_stream(s)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         with breakable_graph(seq, barrier_fn=tp_barrier):
             workload(buf, static_input)
 
@@ -628,7 +637,7 @@ class TestBarrierFnValidation(unittest.TestCase):
 
     def test_non_callable_barrier_fn_raises(self):
         with self.assertRaisesRegex(TypeError, "`barrier_fn` must be callable"):
-            breakable_graph(CUDAGraphSequence(), barrier_fn="not callable")
+            breakable_graph(BreakableCUDAGraph(), barrier_fn="not callable")
 
 
 # ---------------------------------------------------------------------------
@@ -670,7 +679,7 @@ class TestMixedOps(ForceCUDAGraphGC, unittest.TestCase):
             reduce()
             postprocess()
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -717,7 +726,7 @@ class TestMixedOps(ForceCUDAGraphGC, unittest.TestCase):
         def eager_step():
             buf.mul_(2.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -760,7 +769,7 @@ class TestReturnValues(parameterized.TestCase):
         def compute(x):
             return x * 3.0
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         static_input.fill_(2.0)
 
         with self.assertRaisesRegex(RuntimeError, "returns one or more CUDA tensors"):
@@ -780,7 +789,7 @@ class TestReturnValues(parameterized.TestCase):
         def compute(x):
             return pack(x * 2.0, x * 3.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         static_input.fill_(2.0)
 
         with self.assertRaisesRegex(RuntimeError, "returns one or more CUDA tensors"):
@@ -795,7 +804,7 @@ class TestReturnValues(parameterized.TestCase):
             x.mul_(2.0)
             return 1.0
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         static_input.fill_(2.0)
 
         with breakable_graph(seq):
@@ -811,7 +820,7 @@ class TestReturnValues(parameterized.TestCase):
             x.mul_(2.0)
             return torch.tensor(x.numel())
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         static_input.fill_(2.0)
 
         with breakable_graph(seq):
@@ -838,7 +847,7 @@ class TestReturnValues(parameterized.TestCase):
             extra *= 3
             return extra
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -907,7 +916,7 @@ class TestEdgeCases(unittest.TestCase):
             eager_mul(buf)
             buf.mul_(2.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -965,7 +974,7 @@ class TestEdgeCases(unittest.TestCase):
             middle(buf, src)
             buf.mul_(2.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -999,7 +1008,7 @@ class TestEdgeCases(unittest.TestCase):
             buf.fill_(2.0)
             failing_step(buf)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1016,7 +1025,7 @@ class TestEdgeCases(unittest.TestCase):
 
     def test_exception_during_open_segment(self):
         buf = torch.empty(5, device="cuda")
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1046,7 +1055,7 @@ class TestEdgeCases(unittest.TestCase):
             # rather than hit the CUDA-only tensor constructor.
             dst.mul_(factor.item())
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1088,7 +1097,7 @@ class TestEdgeCases(unittest.TestCase):
                 (tensors[0] + tensors[1]) * cfg["weight"] + cfg["cpu_bias"].item()
             )
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1123,7 +1132,7 @@ class TestEdgeCases(unittest.TestCase):
         def eager_step(x: torch.Tensor):
             x.mul_(3.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1162,8 +1171,8 @@ class TestEdgeCases(unittest.TestCase):
 
     def test_nested_breakable_graph_raises(self):
         buf = torch.empty(5, device="cuda")
-        seq1 = CUDAGraphSequence()
-        seq2 = CUDAGraphSequence()
+        seq1 = BreakableCUDAGraph()
+        seq2 = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1192,7 +1201,7 @@ class TestEdgeCases(unittest.TestCase):
             call_count += 1
             x.mul_(2.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1253,7 +1262,7 @@ class TestIsInBreakableGraph(unittest.TestCase):
             eager_step(buf)
             buf.add_(1.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1289,7 +1298,7 @@ class TestIsInBreakableGraph(unittest.TestCase):
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestMemoryPools(unittest.TestCase):
     def test_fresh_sequence_lazy_pool(self):
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         self.assertEqual(seq._segments, [])
         handle = seq.pool()
         self.assertIsNotNone(handle)
@@ -1315,8 +1324,8 @@ class TestMemoryPools(unittest.TestCase):
             eager_scale(buf)
             buf.add_(2.0)
 
-        seq1 = CUDAGraphSequence()
-        seq2 = CUDAGraphSequence(pool=seq1.pool())
+        seq1 = BreakableCUDAGraph()
+        seq2 = BreakableCUDAGraph(pool=seq1.pool())
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1369,7 +1378,7 @@ class TestMemoryPools(unittest.TestCase):
             eager_step(buf)
             buf.add_(2.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1400,7 +1409,7 @@ class TestMemoryPools(unittest.TestCase):
             eager_step(buf)
             buf.add_(1.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1471,7 +1480,7 @@ class TestDropInReplacement(unittest.TestCase):
                 optimizer.step()
         torch.cuda.current_stream().wait_stream(s)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         optimizer.zero_grad(set_to_none=True)
         with breakable_graph(seq):
             static_y_pred = model(static_input)
@@ -1518,7 +1527,7 @@ class TestDropInReplacement(unittest.TestCase):
                 scaler.update()
         torch.cuda.current_stream().wait_stream(s)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         optimizer.zero_grad(set_to_none=True)
         with breakable_graph(seq):
             with torch.amp.autocast("cuda"):
@@ -1580,7 +1589,7 @@ class TestDropInReplacement(unittest.TestCase):
                 loss.backward()
         torch.cuda.current_stream().wait_stream(s)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         model.zero_grad(set_to_none=True)
         with breakable_graph(seq):
             static_y = model(static_input)
@@ -1699,7 +1708,7 @@ class TestDropInReplacement(unittest.TestCase):
         # context (a contextvar) is not visible, so the @no_graph break in the
         # custom backward would not fire. Running on the capturing thread keeps
         # both the context and the stream-capture state consistent.
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         optimizer.zero_grad(set_to_none=True)
         with breakable_graph(seq):
             static_pred = model(static_input)
@@ -1780,7 +1789,7 @@ class TestDebugForkTracking(RepairFailedCapture, ForceCUDAGraphGC, unittest.Test
             torch.cuda.current_stream().wait_stream(side1)  # join side1 only
             eager_step(buf)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1827,7 +1836,7 @@ class TestDebugForkTracking(RepairFailedCapture, ForceCUDAGraphGC, unittest.Test
                 buf.add_(2.0)
             eager_step(buf)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1898,7 +1907,7 @@ class TestForkJoin(ForceCUDAGraphGC, parameterized.TestCase):
 
         static_input = torch.empty(5, device="cuda")
         buf = torch.empty(5, device="cuda")
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1958,7 +1967,7 @@ class TestUnjoinedStreamErrors(
             b.mul_(2.0)
 
         buf = torch.empty(5, device="cuda")
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -1986,7 +1995,7 @@ class TestUnjoinedStreamErrors(
         buf = torch.empty(5, device="cuda")
         side, capture_stream = distinct_streams(2)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
 
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -2036,7 +2045,7 @@ class TestConcurrentCaptures(unittest.TestCase):
                     buf.copy_(src)
                     eager_step(buf, multiplier)
 
-                seq = CUDAGraphSequence()
+                seq = BreakableCUDAGraph()
 
                 with torch.cuda.stream(stream):
                     for _ in range(3):
@@ -2091,7 +2100,7 @@ class TestEagerSegmentRetention(ForceCUDAGraphGC, unittest.TestCase):
         def consume(x: torch.Tensor):
             x.add_(1.0)
 
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         victim = torch.empty(5, device="cuda")
 
         s = torch.cuda.Stream()
@@ -2119,7 +2128,7 @@ class TestEagerSegmentRetention(ForceCUDAGraphGC, unittest.TestCase):
             x.mul_(2.0)
 
         numel = 4099  # odd size, unlikely to collide with other alloc blocks
-        seq = CUDAGraphSequence()
+        seq = BreakableCUDAGraph()
         buf = torch.empty(numel, device="cuda")
         ptr = buf.data_ptr()
 
@@ -2147,7 +2156,7 @@ class TestEndSegmentErrorAttribution(unittest.TestCase):
     """
 
     def _breakable_graph_with_failing_ctx(self, exc: Exception) -> breakable_graph:
-        pg = breakable_graph(CUDAGraphSequence())
+        pg = breakable_graph(BreakableCUDAGraph())
 
         class _FakeCtx:
             def __exit__(self, *args):
