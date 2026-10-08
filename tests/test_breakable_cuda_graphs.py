@@ -8,6 +8,7 @@
 
 import copy
 import gc
+import tempfile
 import threading
 import unittest
 import weakref
@@ -418,6 +419,155 @@ class TestNoGraphPlacement(parameterized.TestCase):
             self.assertTrue(
                 torch.equal(buf, torch.full((5,), val * 3.0 + 1.0, device="cuda"))
             )
+
+
+@pytest.mark.gpus_needed_1
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
+class TestBarrierFn(unittest.TestCase):
+    def test_barrier_runs_at_capture_not_on_replay(self):
+        events = []
+        static_input = torch.empty(5, device="cuda")
+        buf = torch.empty(5, device="cuda")
+
+        @no_graph
+        def step_a(x: torch.Tensor):
+            events.append("a")
+            x.mul_(3.0)
+
+        @no_graph
+        def step_b(x: torch.Tensor):
+            events.append("b")
+            x.add_(1.0)
+
+        def workload(buf: torch.Tensor, src: torch.Tensor):
+            buf.copy_(src)
+            step_a(buf)
+            step_b(buf)
+
+        seq = CUDAGraphSequence()
+
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            for _ in range(3):
+                static_input.fill_(2.0)
+                workload(buf, static_input)
+        torch.cuda.current_stream().wait_stream(s)
+
+        events.clear()
+        with breakable_graph(seq, barrier_fn=lambda: events.append("barrier")):
+            workload(buf, static_input)
+        self.assertEqual(events, ["barrier", "a", "barrier", "b"])
+
+        for val in [2.0, 5.0]:
+            events.clear()
+            static_input.fill_(val)
+            seq.replay()
+            self.assertEqual(events, ["a", "b"])
+            self.assertTrue(
+                torch.equal(buf, torch.full((5,), val * 3.0 + 1.0, device="cuda"))
+            )
+
+
+def _tp_barrier_worker(rank: int, world_size: int, init_file: str, out_q) -> None:
+    """One rank: an eager all-reduce break under a capture whose ``barrier_fn``
+    is a TP barrier. Reports results over a queue rather than asserting, so a
+    failure surfaces in the parent."""
+    try:
+        torch.cuda.set_device(rank)
+        torch.distributed.init_process_group(
+            backend="cpu:gloo,cuda:nccl",
+            init_method=f"file://{init_file}",
+            world_size=world_size,
+            rank=rank,
+        )
+        cpu_group = torch.distributed.new_group(backend="gloo")
+
+        order = []
+
+        def tp_barrier():
+            torch.distributed.barrier(group=cpu_group)
+            order.append("barrier")
+
+        @no_graph
+        def all_reduce_step(x: torch.Tensor):
+            order.append("all_reduce")
+            torch.distributed.all_reduce(x)
+
+        static_input = torch.empty(8, device="cuda")
+        buf = torch.empty(8, device="cuda")
+
+        def workload(buf: torch.Tensor, src: torch.Tensor):
+            buf.copy_(src)
+            buf.mul_(2.0)
+            all_reduce_step(buf)
+            buf.add_(1.0)
+
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            for _ in range(3):
+                static_input.fill_(rank + 1)
+                workload(buf, static_input)
+        torch.cuda.current_stream().wait_stream(s)
+
+        seq = CUDAGraphSequence()
+        with breakable_graph(seq, barrier_fn=tp_barrier):
+            workload(buf, static_input)
+
+        results = []
+        for val in (1.0, 4.0):
+            static_input.fill_((rank + 1) * val)
+            seq.replay()
+            torch.cuda.synchronize()
+            results.append(buf[0].item())
+
+        out_q.put((rank, None, results, order))
+    except Exception as exc:
+        out_q.put((rank, f"{type(exc).__name__}: {exc}", None, None))
+    finally:
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+
+
+@pytest.mark.gpus_needed_2
+@unittest.skipUnless(torch.cuda.device_count() >= 2, "fewer than 2 CUDA devices")
+class TestBarrierFnTensorParallel(unittest.TestCase):
+    def test_rank_coupled_all_reduce_break_with_tp_barrier(self):
+        world_size = 2
+        ctx = torch.multiprocessing.get_context("spawn")
+        out_q = ctx.Queue()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            init_file = f"{tmp}/pg_init"
+            torch.multiprocessing.spawn(
+                _tp_barrier_worker,
+                args=(world_size, init_file, out_q),
+                nprocs=world_size,
+                join=True,
+            )
+            reports = [out_q.get(timeout=60) for _ in range(world_size)]
+
+        for rank, error, results, order in sorted(reports):
+            self.assertIsNone(error, f"rank {rank} failed: {error}")
+            # Each rank contributes 2 * (rank + 1) * val; the sum over ranks is
+            # 6 * val, and the post-break segment adds 1.
+            self.assertEqual(results, [7.0, 25.0], f"rank {rank}")
+            # Only the capture pass runs the barrier.
+            self.assertEqual(
+                order,
+                ["all_reduce"] * 3 + ["barrier", "all_reduce"] + ["all_reduce"] * 2,
+                f"rank {rank}",
+            )
+
+
+class TestBarrierFnValidation(unittest.TestCase):
+    """`barrier_fn` is validated when the capture context is constructed, so a
+    bad value fails before capture starts. Runs on CPU."""
+
+    def test_non_callable_barrier_fn_raises(self):
+        with self.assertRaisesRegex(TypeError, "`barrier_fn` must be callable"):
+            breakable_graph(CUDAGraphSequence(), barrier_fn="not callable")
 
 
 # ---------------------------------------------------------------------------
